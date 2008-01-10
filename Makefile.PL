@@ -8,6 +8,8 @@ build_requires 'Test::More';
 
 requires 'Pod::Usage';
 
+install_script 'bin/svn-replicate';
+
 auto_install;
 
 WriteAll;
