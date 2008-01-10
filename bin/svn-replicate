@@ -1,0 +1,128 @@
+#!/usr/bin/perl
+
+use FindBin;
+use lib ("$FindBin::Bin/../lib");
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+use Pod::Usage;
+use SVN::Replicate;
+
+my $man  = 0;
+my $help = 0;
+
+my $localpath   = '';
+my $rsyncpath   = '';
+my $sshidentity = '';
+my $onhup       = 0;
+
+GetOptions(
+  'l|localpath=s'   => \$localpath,
+  'r|rsyncpath=s'   => \$rsyncpath,
+  's|sshidentity=s' => \$sshidentity,
+  'h|onhup'         => \$onhup,
+  'help|?'          => \$help,
+  'man'             => \$man,
+);
+pod2usage(1) if $help;
+pod2usage( -exitstatus => 0, -verbose => 2 ) if $man;
+pod2usage( -exitstatus => 1, -msg => "You must supply -l, -r and -s" )
+  unless $localpath && $rsyncpath && $sshidentity;
+
+my $sr = SVN::Replicate->new(
+  local_path   => $localpath,
+  rsync_path   => $rsyncpath,
+  ssh_identity => $sshidentity,
+);
+
+my $run_times = 0;
+my $double_check_interval =
+  60;    # $double_check_interval x 10 == seconds between stat
+my $last_mtime = &get_mtime;
+
+sub hup_handler {
+  $run_times++;
+}
+
+sub get_mtime {
+  my @stat  = stat("$localpath/db/current");
+  my $mtime = $stat[9];
+  return $mtime;
+}
+
+my $interval = 0;
+if ($onhup) {
+  $SIG{'HUP'} = 'hup_handler';
+
+  while (1) {
+    if ( $run_times > 0 ) {
+      print "Replicating from HUP...\n";
+      $last_mtime = &get_mtime;
+      $sr->replicate;
+      $run_times--;
+    } elsif ( $interval >= $double_check_interval ) {
+      my $current_mtime = &get_mtime;
+      if ( $current_mtime != $last_mtime ) {
+        print "Changed mtime! Syncing!\n";
+        $last_mtime = $current_mtime;
+        $sr->replicate;
+      }
+      $interval = 0;
+    } else {
+      sleep 10;
+      $interval++;
+    }
+  }
+} else {
+  $sr->replicate;
+}
+
+exit 0;
+
+=head1 NAME
+
+svn-replicate (replicate a subversion repository on demand)
+
+=head1 SYNOPSIS
+
+svn-replicate [options]
+
+  Options:
+   -l, -localpath    The path to your SVN repository.
+   -r, -rsyncpath    The remote rsync path. (hostname:/foo/bar)
+   -s, -sshidentity  The path to a password-less SSH key to use
+   -h, -onhup        This script will stay alive, and replicate on SIGHUP
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<-l or -localpath>
+
+A path to your local subversion repo.
+
+=item B<-r or -rsyncpath>
+
+An rsync path to your remote host. (hostname:/foo/bar)
+
+=item B<-s or -sshidentity>
+
+The SSH identity to use during the rsync.
+
+=item B<-h or -onhup>
+
+This script will stay running, instead of syncing immediately.  On receipt of a 
+SIGHUP, it will syncronize the repository.  Every 10 minutes, it will check to
+see if a change has been committed to the repository that it has not replicated;
+if there has been, it will synchronize the repository.
+
+=back
+
+=head1 DESCRIPTION
+
+B<escrow> reads a data file and populates the Escrow store with it's contents.
+
+=cut
+
